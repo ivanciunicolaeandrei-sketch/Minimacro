@@ -3,6 +3,7 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
+#include <gdr/gdr.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -50,6 +51,48 @@ bool saveMacro() {
     return out.good();
 }
 void startPlay() { if(events.empty()) return; recording=false; playing=true; frameNo=0; playIndex=0; playbackAccumulator=0.f; }
+bool importJSONFile(std::filesystem::path const& path) {
+    std::ifstream input(path);
+    if (!input) return false;
+    std::ostringstream contents; contents << input.rdbuf();
+    auto parsed = matjson::parse(contents.str());
+    if (!parsed) return false;
+    auto json = parsed.unwrap();
+    if (!json["inputs"].isArray()) return false;
+    std::vector<MacroEvent> imported;
+    for (auto const& item : json["inputs"]) {
+        auto frame = item["frame"].asUInt();
+        auto button = item["btn"].asUInt();
+        auto p2 = item["2p"].asBool();
+        auto down = item["down"].asBool();
+        if (!frame || !button || !p2 || !down || frame.unwrap() > 4294967295ULL || button.unwrap() > 255) return false;
+        imported.push_back({static_cast<unsigned>(frame.unwrap()), static_cast<unsigned char>(button.unwrap()), p2.unwrap(), down.unwrap()});
+    }
+    if (imported.empty()) return false;
+    std::stable_sort(imported.begin(), imported.end(), [](auto const& a, auto const& b) { return a.frame < b.frame; });
+    events = std::move(imported);
+    frameNo = 0; playIndex = 0; recording = false; playing = false;
+    auto tps = json["framerate"].asInt();
+    if (tps && tps.unwrap() >= 30 && tps.unwrap() <= 360) playbackTPS = static_cast<int>(tps.unwrap());
+    return true;
+}
+bool importGDR2File(std::filesystem::path const& path) {
+    auto parsed = gdr::Replay<>::importData(path);
+    if (parsed.isErr()) return false;
+    auto replay = std::move(parsed).unwrap();
+    std::vector<MacroEvent> imported;
+    imported.reserve(replay.inputs.size());
+    for (auto const& input : replay.inputs) {
+        if (input.frame > 4294967295ULL) return false;
+        imported.push_back({static_cast<unsigned>(input.frame), input.button, input.player2, input.down});
+    }
+    if (imported.empty()) return false;
+    std::stable_sort(imported.begin(), imported.end(), [](auto const& a, auto const& b) { return a.frame < b.frame; });
+    events = std::move(imported);
+    frameNo = 0; playIndex = 0; recording = false; playing = false;
+    if (replay.framerate >= 30.0 && replay.framerate <= 360.0) playbackTPS = static_cast<int>(replay.framerate);
+    return true;
+}
 void playbackTick() {
     if(!playing) return;
     auto pl=PlayLayer::get(); if(!pl) {playing=false;return;}
@@ -148,7 +191,7 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
     void mmImport(CCObject*) {
         geode::utils::file::FilePickOptions options;
         options.defaultPath = Mod::get()->getConfigDir() / "mm macro folder";
-        options.filters.push_back({"MiniMacro JSON", {"json"}});
+        options.filters.push_back({"MiniMacro / GDR replay", {"json", "gdr", "gdr2"}});
         geode::async::spawn(
             geode::utils::file::pick(geode::utils::file::PickMode::OpenFile, std::move(options)),
             [](geode::utils::file::PickResult result) {
@@ -158,59 +201,14 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
                 }
                 auto selected = result.unwrap();
                 if (!selected.has_value()) return;
-                std::ifstream input(selected->string());
-                if (!input) {
-                    FLAlertLayer::create("MiniMacro", "Could not open that file.", "OK")->show();
-                    return;
-                }
-                std::ostringstream contents;
-                contents << input.rdbuf();
-                auto parsed = matjson::parse(contents.str());
-                if (!parsed) {
-                    FLAlertLayer::create("MiniMacro", "Invalid JSON macro file.", "OK")->show();
-                    return;
-                }
-                auto json = parsed.unwrap();
-                if (!json["inputs"].isArray()) {
-                    FLAlertLayer::create("MiniMacro", "This JSON does not contain MiniMacro inputs.", "OK")->show();
-                    return;
-                }
-                std::vector<MacroEvent> imported;
-                bool valid = true;
-                for (auto const& item : json["inputs"]) {
-                    auto frame = item["frame"].asUInt();
-                    auto button = item["btn"].asUInt();
-                    auto p2 = item["2p"].asBool();
-                    auto down = item["down"].asBool();
-                    if (!frame || !button || !p2 || !down ||
-                        frame.unwrap() > 4294967295ULL || button.unwrap() > 255) {
-                        valid = false;
-                        break;
-                    }
-                    imported.push_back({
-                        static_cast<unsigned>(frame.unwrap()),
-                        static_cast<unsigned char>(button.unwrap()),
-                        p2.unwrap(),
-                        down.unwrap()
-                    });
-                }
-                if (!valid || imported.empty()) {
-                    FLAlertLayer::create("MiniMacro", "Macro data is invalid or contains no inputs.", "OK")->show();
-                    return;
-                }
-                std::stable_sort(imported.begin(), imported.end(), [](auto const& a, auto const& b) {
-                    return a.frame < b.frame;
-                });
-                events = std::move(imported);
-                frameNo = 0;
-                playIndex = 0;
-                recording = false;
-                playing = false;
-                auto tps = json["framerate"].asInt();
-                if (tps && tps.unwrap() >= 30 && tps.unwrap() <= 360) {
-                    playbackTPS = static_cast<int>(tps.unwrap());
-                }
-                FLAlertLayer::create("MiniMacro", "Macro imported successfully!", "OK")->show();
+                auto path = selected.value();
+                bool imported = false;
+                std::ifstream probe(path, std::ios::binary);
+                char magic[3] = {};
+                if (probe.read(magic, 3) && std::string(magic, 3) == "GDR") imported = importGDR2File(path);
+                else imported = importJSONFile(path);
+                if (imported) FLAlertLayer::create("MiniMacro", "Replay imported successfully!", "OK")->show();
+                else FLAlertLayer::create("MiniMacro", "Unsupported or invalid replay. GDR2 binary and MiniMacro JSON are supported.", "OK")->show();
             }
         );
     }
