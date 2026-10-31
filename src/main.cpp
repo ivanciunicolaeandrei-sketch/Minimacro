@@ -1,5 +1,6 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 #include <algorithm>
 #include <filesystem>
@@ -68,18 +69,6 @@ class $modify(MiniMacroPlayer, PlayerObject) {
 };
 
 class $modify(MiniMacroPlayLayer, PlayLayer) {
-    void onEnter() {
-        PlayLayer::onEnter();
-        auto ws=CCDirector::sharedDirector()->getWinSize();
-        auto menu=CCMenu::create();
-        menu->setPosition({ws.width-38.f, ws.height*0.58f});
-        auto spr=ButtonSprite::create("MM", "goldFont.fnt", "GJ_button_05.png", 0.7f);
-        spr->setScale(0.55f);
-        auto item=CCMenuItemSpriteExtra::create(spr,this,menu_selector(MiniMacroPlayLayer::openMiniMacro));
-        menu->addChild(item);
-        menu->setID("minimacro-floating-button");
-        this->addChild(menu, 1000);
-    }
     void update(float dt) {
         PlayLayer::update(dt);
         if(recording || playing) ++frameNo;
@@ -130,4 +119,54 @@ class $modify(MiniMacroPlayLayer, PlayLayer) {
     void mmClose(CCObject*) { if(menuPanel) {menuPanel->removeFromParentAndCleanup(true);menuPanel=nullptr;} }
 };
 
-$on_mod(Loaded) { log::info("MiniMacro loaded: floating in-game menu enabled."); }
+
+class $modify(MiniMacroPauseLayer, PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+        auto ws = this->getContentSize();
+        auto menu = CCMenu::create();
+        menu->setPosition({ws.width * 0.5f, ws.height * 0.22f});
+        auto spr = ButtonSprite::create("MM", "goldFont.fnt", "GJ_button_05.png", 0.7f);
+        auto item = CCMenuItemSpriteExtra::create(spr, this, menu_selector(MiniMacroPauseLayer::openMiniMacro));
+        menu->addChild(item);
+        menu->setID("minimacro-pause-button");
+        this->addChild(menu, 1000);
+    }
+
+    void openMiniMacro(CCObject*) {
+        if (menuPanel) { menuPanel->removeFromParentAndCleanup(true); menuPanel = nullptr; return; }
+        auto ws = this->getContentSize();
+        menuPanel = CCLayerColor::create({12, 3, 28, 245});
+        menuPanel->setContentSize({ws.width * 0.82f, ws.height * 0.62f});
+        menuPanel->setPosition({ws.width * 0.09f, ws.height * 0.19f});
+        menuPanel->setID("minimacro-pause-panel");
+        this->addChild(menuPanel, 2000);
+        auto title = CCLabelBMFont::create("MiniMacro", "bigFont.fnt");
+        title->setPosition({menuPanel->getContentWidth()/2, menuPanel->getContentHeight()-30});
+        menuPanel->addChild(title);
+        auto buttons = CCMenu::create();
+        buttons->setPosition({menuPanel->getContentWidth()/2, menuPanel->getContentHeight()/2});
+        auto add = [&](char const* label, SEL_MenuHandler fn, float x, float y) {
+            auto s = ButtonSprite::create(label, "bigFont.fnt", "GJ_button_05.png", 0.65f);
+            auto b = CCMenuItemSpriteExtra::create(s, this, fn);
+            b->setPosition({x,y});
+            buttons->addChild(b);
+        };
+        add("Record", menu_selector(MiniMacroPauseLayer::mmRecord), -menuPanel->getContentWidth()*0.28f, 35);
+        add("Stop", menu_selector(MiniMacroPauseLayer::mmStop), 0, 35);
+        add("Play", menu_selector(MiniMacroPauseLayer::mmPlay), menuPanel->getContentWidth()*0.28f, 35);
+        add("Save", menu_selector(MiniMacroPauseLayer::mmSave), -menuPanel->getContentWidth()*0.18f, -35);
+        add("Close", menu_selector(MiniMacroPauseLayer::mmClose), menuPanel->getContentWidth()*0.18f, -35);
+        menuPanel->addChild(buttons);
+    }
+    void mmRecord(CCObject*) { beginRec(); }
+    void mmStop(CCObject*) { stopRec(); playing = false; }
+    void mmPlay(CCObject*) { startPlay(); }
+    void mmSave(CCObject*) {
+        if (saveMacro()) FLAlertLayer::create("MiniMacro", "Macro saved in Geode/macros.", "OK")->show();
+        else FLAlertLayer::create("MiniMacro", "Nothing recorded yet, or save failed.", "OK")->show();
+    }
+    void mmClose(CCObject*) { if (menuPanel) { menuPanel->removeFromParentAndCleanup(true); menuPanel = nullptr; } }
+};
+
+$on_mod(Loaded) { log::info("MiniMacro loaded: pause-menu button enabled."); }
