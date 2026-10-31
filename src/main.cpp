@@ -50,6 +50,23 @@ bool saveMacro() {
     out << "  ],\n  \"lastRecordedFrame\":"<<frameNo<<"\n}\n";
     return out.good();
 }
+bool saveGDR2() {
+    auto pl = PlayLayer::get();
+    if (!pl || !pl->m_level || events.empty()) return false;
+    auto dir = Mod::get()->getConfigDir() / "mm macro folder";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) return false;
+    gdr::Replay<> replay("MiniMacro", 1);
+    replay.framerate = playbackTPS;
+    replay.duration = static_cast<float>(frameNo) / static_cast<float>(playbackTPS);
+    replay.levelInfo.name = pl->m_level->m_levelName;
+    replay.inputs.reserve(events.size());
+    for (auto const& e : events) replay.inputs.emplace_back(e.frame, e.button, e.p2, e.down);
+    replay.sortInputs();
+    auto result = replay.exportData(dir / (safeName(pl->m_level->m_levelName) + ".gdr2"));
+    return result.isOk();
+}
 void startPlay() { if(events.empty()) return; recording=false; playing=true; frameNo=0; playIndex=0; playbackAccumulator=0.f; }
 bool importJSONFile(std::filesystem::path const& path) {
     std::ifstream input(path);
@@ -170,12 +187,13 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
         add("Record", menu_selector(MiniMacroPauseLayer::mmRecord), -menuPanel->getContentWidth()*0.28f, 35);
         add("Stop", menu_selector(MiniMacroPauseLayer::mmStop), 0, 35);
         add("Play", menu_selector(MiniMacroPauseLayer::mmPlay), menuPanel->getContentWidth()*0.28f, 35);
-        add("Save", menu_selector(MiniMacroPauseLayer::mmSave), -menuPanel->getContentWidth()*0.28f, -35);
-        add("Import", menu_selector(MiniMacroPauseLayer::mmImport), menuPanel->getContentWidth()*0.28f, -35);
-        add("TPS -", menu_selector(MiniMacroPauseLayer::mmTPSDown), -menuPanel->getContentWidth()*0.28f, -78);
-        add("TPS +", menu_selector(MiniMacroPauseLayer::mmTPSUp), 0, -78);
-        add("Loop", menu_selector(MiniMacroPauseLayer::mmLoop), menuPanel->getContentWidth()*0.28f, -78);
-        add("Close", menu_selector(MiniMacroPauseLayer::mmClose), 0, -112);
+        add("Save JSON", menu_selector(MiniMacroPauseLayer::mmSave), -menuPanel->getContentWidth()*0.28f, 0);
+        add("Save GDR2", menu_selector(MiniMacroPauseLayer::mmSaveGDR2), 0, 0);
+        add("Import", menu_selector(MiniMacroPauseLayer::mmImport), menuPanel->getContentWidth()*0.28f, 0);
+        add("TPS -", menu_selector(MiniMacroPauseLayer::mmTPSDown), -menuPanel->getContentWidth()*0.28f, -48);
+        add("TPS +", menu_selector(MiniMacroPauseLayer::mmTPSUp), 0, -48);
+        add("Loop", menu_selector(MiniMacroPauseLayer::mmLoop), menuPanel->getContentWidth()*0.28f, -48);
+        add("Close", menu_selector(MiniMacroPauseLayer::mmClose), 0, -88);
         menuPanel->addChild(buttons);
     }
     void mmRecord(CCObject*) { beginRec(); }
@@ -184,6 +202,10 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
     void mmSave(CCObject*) {
         if (saveMacro()) FLAlertLayer::create("MiniMacro", "Macro saved in config/mm macro folder.", "OK")->show();
         else FLAlertLayer::create("MiniMacro", "Nothing recorded yet, or save failed.", "OK")->show();
+    }
+    void mmSaveGDR2(CCObject*) {
+        if (saveGDR2()) FLAlertLayer::create("MiniMacro", "GDR2 replay saved in config/mm macro folder.", "OK")->show();
+        else FLAlertLayer::create("MiniMacro", "Nothing recorded yet, or GDR2 export failed.", "OK")->show();
     }
     void mmTPSDown(CCObject*) { playbackTPS = std::max(30, playbackTPS - 30); }
     void mmTPSUp(CCObject*) { playbackTPS = std::min(360, playbackTPS + 30); }
