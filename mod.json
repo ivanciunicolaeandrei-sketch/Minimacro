@@ -1,0 +1,11 @@
+{
+  "geode": "5.11.2",
+  "gd": {
+    "android": "2.2081"
+  },
+  "id": "ivanciunicolaeandrei.minimacro",
+  "name": "MiniMacro",
+  "version": "0.1.0",
+  "developer": "MiniMacro",
+  "description": "An Android-friendly Geometry Dash macro recorder and replay tool."
+}
