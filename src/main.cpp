@@ -17,6 +17,7 @@ unsigned frameNo = 0;
 size_t playIndex = 0;
 bool recording = false, playing = false, loopPlayback = false;
 int playbackTPS = 240;
+float playbackAccumulator = 0.f;
 CCLayerColor* menuPanel = nullptr;
 
 std::string safeName(std::string s) {
@@ -46,7 +47,7 @@ bool saveMacro() {
     out << "  ],\n  \"lastRecordedFrame\":"<<frameNo<<"\n}\n";
     return out.good();
 }
-void startPlay() { if(events.empty()) return; recording=false; playing=true; frameNo=0; playIndex=0; }
+void startPlay() { if(events.empty()) return; recording=false; playing=true; frameNo=0; playIndex=0; playbackAccumulator=0.f; }
 void playbackTick() {
     if(!playing) return;
     auto pl=PlayLayer::get(); if(!pl) {playing=false;return;}
@@ -71,8 +72,21 @@ class $modify(MiniMacroPlayer, PlayerObject) {
 class $modify(MiniMacroPlayLayer, PlayLayer) {
     void update(float dt) {
         PlayLayer::update(dt);
-        if(recording || playing) ++frameNo;
-        playbackTick();
+        if (recording) {
+            ++frameNo;
+            return;
+        }
+        if (playing) {
+            playbackAccumulator += std::max(0.f, dt);
+            float frameDuration = 1.f / static_cast<float>(std::max(30, std::min(360, playbackTPS)));
+            // Process every macro frame elapsed, even if the game update is slower.
+            unsigned safety = 0;
+            while (playing && playbackAccumulator >= frameDuration && safety++ < 12) {
+                playbackAccumulator -= frameDuration;
+                ++frameNo;
+                playbackTick();
+            }
+        }
     }
     void onQuit() { recording=false; playing=false; PlayLayer::onQuit(); }
 
@@ -155,18 +169,24 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
         add("Record", menu_selector(MiniMacroPauseLayer::mmRecord), -menuPanel->getContentWidth()*0.28f, 35);
         add("Stop", menu_selector(MiniMacroPauseLayer::mmStop), 0, 35);
         add("Play", menu_selector(MiniMacroPauseLayer::mmPlay), menuPanel->getContentWidth()*0.28f, 35);
-        add("Save", menu_selector(MiniMacroPauseLayer::mmSave), -menuPanel->getContentWidth()*0.18f, -35);
-        add("Import", menu_selector(MiniMacroPauseLayer::mmImport), menuPanel->getContentWidth()*0.18f, -35);
-        add("Close", menu_selector(MiniMacroPauseLayer::mmClose), 0, -75);
+        add("Save", menu_selector(MiniMacroPauseLayer::mmSave), -menuPanel->getContentWidth()*0.28f, -35);
+        add("Import", menu_selector(MiniMacroPauseLayer::mmImport), menuPanel->getContentWidth()*0.28f, -35);
+        add("TPS -", menu_selector(MiniMacroPauseLayer::mmTPSDown), -menuPanel->getContentWidth()*0.28f, -78);
+        add("TPS +", menu_selector(MiniMacroPauseLayer::mmTPSUp), 0, -78);
+        add("Loop", menu_selector(MiniMacroPauseLayer::mmLoop), menuPanel->getContentWidth()*0.28f, -78);
+        add("Close", menu_selector(MiniMacroPauseLayer::mmClose), 0, -112);
         menuPanel->addChild(buttons);
     }
     void mmRecord(CCObject*) { beginRec(); }
     void mmStop(CCObject*) { stopRec(); playing = false; }
     void mmPlay(CCObject*) { startPlay(); }
     void mmSave(CCObject*) {
-        if (saveMacro()) FLAlertLayer::create("MiniMacro", "Macro saved in Geode/macros.", "OK")->show();
+        if (saveMacro()) FLAlertLayer::create("MiniMacro", "Macro saved in config/mm macro folder.", "OK")->show();
         else FLAlertLayer::create("MiniMacro", "Nothing recorded yet, or save failed.", "OK")->show();
     }
+    void mmTPSDown(CCObject*) { playbackTPS = std::max(30, playbackTPS - 30); }
+    void mmTPSUp(CCObject*) { playbackTPS = std::min(360, playbackTPS + 30); }
+    void mmLoop(CCObject*) { loopPlayback = !loopPlayback; }
     void mmImport(CCObject*) {
         geode::utils::file::FilePickOptions options;
         options.defaultPath = Mod::get()->getConfigDir() / "mm macro folder";
