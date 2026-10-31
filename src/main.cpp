@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#include <Geode/utils/file.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
@@ -30,7 +31,7 @@ void capture(PlayerObject* p, PlayerButton b, bool down) {
     bool p2=(p==pl->m_player2); if (p!=pl->m_player1 && !p2) return;
     events.push_back({frameNo, static_cast<unsigned char>(b), p2, down});
 }
-void beginRec() { events.clear(); frameNo=0; playIndex=0; playing=false; recording=true; }
+void beginRec() { events.clear(); frameNo=0; playIndex=0; playbackAccumulator=0.f; playing=false; recording=true; }
 void stopRec() { recording=false; }
 bool saveMacro() {
     auto pl=PlayLayer::get(); if (!pl || !pl->m_level || events.empty()) return false;
@@ -72,67 +73,23 @@ class $modify(MiniMacroPlayer, PlayerObject) {
 class $modify(MiniMacroPlayLayer, PlayLayer) {
     void update(float dt) {
         PlayLayer::update(dt);
-        if (recording) {
+        if (!recording && !playing) return;
+        playbackAccumulator += std::max(0.f, dt);
+        float frameDuration = 1.f / static_cast<float>(std::max(30, std::min(360, playbackTPS)));
+        unsigned safety = 0;
+        while ((recording || playing) && playbackAccumulator >= frameDuration && safety++ < 24) {
+            playbackAccumulator -= frameDuration;
             ++frameNo;
-            return;
-        }
-        if (playing) {
-            playbackAccumulator += std::max(0.f, dt);
-            float frameDuration = 1.f / static_cast<float>(std::max(30, std::min(360, playbackTPS)));
-            // Process every macro frame elapsed, even if the game update is slower.
-            unsigned safety = 0;
-            while (playing && playbackAccumulator >= frameDuration && safety++ < 12) {
-                playbackAccumulator -= frameDuration;
-                ++frameNo;
-                playbackTick();
-            }
+            if (playing) playbackTick();
         }
     }
-    void onQuit() { recording=false; playing=false; PlayLayer::onQuit(); }
-
-    void openMiniMacro(CCObject*) {
-        if(menuPanel) { menuPanel->removeFromParentAndCleanup(true); menuPanel=nullptr; return; }
-        auto ws=CCDirector::sharedDirector()->getWinSize();
-        menuPanel=CCLayerColor::create({12,3,28,238});
-        menuPanel->setContentSize({ws.width*0.88f, ws.height*0.78f});
-        menuPanel->setPosition({ws.width*0.06f,ws.height*0.11f});
-        menuPanel->setID("minimacro-eclipse-menu");
-        this->addChild(menuPanel,2000);
-        auto title=CCLabelBMFont::create("MiniMacro", "bigFont.fnt");
-        title->setScale(0.8f); title->setPosition({menuPanel->getContentWidth()/2,menuPanel->getContentHeight()-32});
-        menuPanel->addChild(title);
-        auto subtitle=CCLabelBMFont::create("ECLIPSE MOBILE STYLE", "goldFont.fnt");
-        subtitle->setScale(0.42f); subtitle->setPosition({menuPanel->getContentWidth()/2,menuPanel->getContentHeight()-58});
-        menuPanel->addChild(subtitle);
-        auto buttons=CCMenu::create();
-        buttons->setPosition({menuPanel->getContentWidth()/2,menuPanel->getContentHeight()/2-12});
-        auto add=[&](char const* text, SEL_MenuHandler fn, float x,float y) {
-            auto s=ButtonSprite::create(text,"bigFont.fnt","GJ_button_05.png",0.65f);
-            s->setScale(0.62f);
-            auto b=CCMenuItemSpriteExtra::create(s,this,fn); b->setPosition({x,y}); buttons->addChild(b);
-        };
-        add("Record",menu_selector(MiniMacroPlayLayer::mmRecord),-menuPanel->getContentWidth()*0.28f,58);
-        add("Stop",menu_selector(MiniMacroPlayLayer::mmStop),0,58);
-        add("Play",menu_selector(MiniMacroPlayLayer::mmPlay),menuPanel->getContentWidth()*0.28f,58);
-        add("Save Macro",menu_selector(MiniMacroPlayLayer::mmSave),-menuPanel->getContentWidth()*0.28f,0);
-        add("TPS -",menu_selector(MiniMacroPlayLayer::mmTPSDown),0,0);
-        add("TPS +",menu_selector(MiniMacroPlayLayer::mmTPSUp),menuPanel->getContentWidth()*0.28f,0);
-        add("Loop",menu_selector(MiniMacroPlayLayer::mmLoop),-menuPanel->getContentWidth()*0.18f,-58);
-        add("Close",menu_selector(MiniMacroPlayLayer::mmClose),menuPanel->getContentWidth()*0.22f,-58);
-        menuPanel->addChild(buttons);
-        auto status=CCLabelBMFont::create("Record / Stop / Play  |  Save to Geode/macros", "chatFont.fnt");
-        status->setScale(0.42f); status->setPosition({menuPanel->getContentWidth()/2,24}); menuPanel->addChild(status);
+    void onQuit() {
+        recording = false;
+        playing = false;
+        playbackAccumulator = 0.f;
+        PlayLayer::onQuit();
     }
-    void mmRecord(CCObject*) { beginRec(); }
-    void mmStop(CCObject*) { stopRec(); playing=false; }
-    void mmPlay(CCObject*) { startPlay(); }
-    void mmSave(CCObject*) { if(saveMacro()) FLAlertLayer::create("MiniMacro","Macro saved in Geode save folder /macros.","OK")->show(); else FLAlertLayer::create("MiniMacro","Nothing recorded yet, or save failed.","OK")->show(); }
-    void mmTPSDown(CCObject*) { playbackTPS=std::max(30,playbackTPS-30); }
-    void mmTPSUp(CCObject*) { playbackTPS=std::min(360,playbackTPS+30); }
-    void mmLoop(CCObject*) { loopPlayback=!loopPlayback; }
-    void mmClose(CCObject*) { if(menuPanel) {menuPanel->removeFromParentAndCleanup(true);menuPanel=nullptr;} }
 };
-
 
 class $modify(MiniMacroPauseLayer, PauseLayer) {
     void customSetup() {
@@ -194,12 +151,12 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
         geode::async::spawn(
             geode::utils::file::pick(geode::utils::file::PickMode::OpenFile, std::move(options)),
             [](geode::utils::file::PickResult result) {
-                if (!result) {
-                    FLAlertLayer::create("MiniMacro", "The file picker failed.", "OK")->show();
+                if (!result.isOk()) {
+                    FLAlertLayer::create("MiniMacro", "The file picker could not open.", "OK")->show();
                     return;
                 }
                 auto selected = result.unwrap();
-                if (!selected) return;
+                if (!selected.has_value()) return;
                 std::ifstream input(selected->string());
                 if (!input) {
                     FLAlertLayer::create("MiniMacro", "Could not open that file.", "OK")->show();
