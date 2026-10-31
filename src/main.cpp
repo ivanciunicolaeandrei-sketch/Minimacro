@@ -33,7 +33,7 @@ void beginRec() { events.clear(); frameNo=0; playIndex=0; playing=false; recordi
 void stopRec() { recording=false; }
 bool saveMacro() {
     auto pl=PlayLayer::get(); if (!pl || !pl->m_level || events.empty()) return false;
-    auto dir=Mod::get()->getSaveDir()/"macros"; std::error_code ec;
+    auto dir=Mod::get()->getConfigDir()/"mm macro folder"; std::error_code ec;
     std::filesystem::create_directories(dir,ec); if(ec) return false;
     std::ofstream out(dir/(safeName(pl->m_level->m_levelName)+".gdr.json"));
     if(!out) return false;
@@ -156,7 +156,8 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
         add("Stop", menu_selector(MiniMacroPauseLayer::mmStop), 0, 35);
         add("Play", menu_selector(MiniMacroPauseLayer::mmPlay), menuPanel->getContentWidth()*0.28f, 35);
         add("Save", menu_selector(MiniMacroPauseLayer::mmSave), -menuPanel->getContentWidth()*0.18f, -35);
-        add("Close", menu_selector(MiniMacroPauseLayer::mmClose), menuPanel->getContentWidth()*0.18f, -35);
+        add("Import", menu_selector(MiniMacroPauseLayer::mmImport), menuPanel->getContentWidth()*0.18f, -35);
+        add("Close", menu_selector(MiniMacroPauseLayer::mmClose), 0, -75);
         menuPanel->addChild(buttons);
     }
     void mmRecord(CCObject*) { beginRec(); }
@@ -165,6 +166,73 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
     void mmSave(CCObject*) {
         if (saveMacro()) FLAlertLayer::create("MiniMacro", "Macro saved in Geode/macros.", "OK")->show();
         else FLAlertLayer::create("MiniMacro", "Nothing recorded yet, or save failed.", "OK")->show();
+    }
+    void mmImport(CCObject*) {
+        geode::utils::file::FilePickOptions options;
+        options.defaultPath = Mod::get()->getConfigDir() / "mm macro folder";
+        options.filters.push_back({"MiniMacro JSON", {"json"}});
+        geode::async::spawn(
+            geode::utils::file::pick(geode::utils::file::PickMode::OpenFile, std::move(options)),
+            [](geode::utils::file::PickResult result) {
+                if (!result) {
+                    FLAlertLayer::create("MiniMacro", "The file picker failed.", "OK")->show();
+                    return;
+                }
+                auto selected = result.unwrap();
+                if (!selected) return;
+                std::ifstream input(selected->string());
+                if (!input) {
+                    FLAlertLayer::create("MiniMacro", "Could not open that file.", "OK")->show();
+                    return;
+                }
+                auto parsed = matjson::parse(input);
+                if (!parsed) {
+                    FLAlertLayer::create("MiniMacro", "Invalid JSON macro file.", "OK")->show();
+                    return;
+                }
+                auto json = parsed.unwrap();
+                if (!json["inputs"].isArray()) {
+                    FLAlertLayer::create("MiniMacro", "This JSON does not contain MiniMacro inputs.", "OK")->show();
+                    return;
+                }
+                std::vector<MacroEvent> imported;
+                bool valid = true;
+                for (auto const& item : json["inputs"]) {
+                    auto frame = item["frame"].asUInt();
+                    auto button = item["btn"].asUInt();
+                    auto p2 = item["2p"].asBool();
+                    auto down = item["down"].asBool();
+                    if (!frame || !button || !p2 || !down ||
+                        frame.unwrap() > 4294967295ULL || button.unwrap() > 255) {
+                        valid = false;
+                        break;
+                    }
+                    imported.push_back({
+                        static_cast<unsigned>(frame.unwrap()),
+                        static_cast<unsigned char>(button.unwrap()),
+                        p2.unwrap(),
+                        down.unwrap()
+                    });
+                }
+                if (!valid || imported.empty()) {
+                    FLAlertLayer::create("MiniMacro", "Macro data is invalid or contains no inputs.", "OK")->show();
+                    return;
+                }
+                std::stable_sort(imported.begin(), imported.end(), [](auto const& a, auto const& b) {
+                    return a.frame < b.frame;
+                });
+                events = std::move(imported);
+                frameNo = 0;
+                playIndex = 0;
+                recording = false;
+                playing = false;
+                auto tps = json["framerate"].asInt();
+                if (tps && tps.unwrap() >= 30 && tps.unwrap() <= 360) {
+                    playbackTPS = static_cast<int>(tps.unwrap());
+                }
+                FLAlertLayer::create("MiniMacro", "Macro imported successfully!", "OK")->show();
+            }
+        );
     }
     void mmClose(CCObject*) { if (menuPanel) { menuPanel->removeFromParentAndCleanup(true); menuPanel = nullptr; } }
 };
