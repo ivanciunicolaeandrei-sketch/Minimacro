@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <sstream>
 #include <vector>
 
 using namespace geode::prelude;
@@ -162,7 +163,9 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
                     FLAlertLayer::create("MiniMacro", "Could not open that file.", "OK")->show();
                     return;
                 }
-                auto parsed = matjson::parse(input);
+                std::ostringstream contents;
+                contents << input.rdbuf();
+                auto parsed = matjson::parse(contents.str());
                 if (!parsed) {
                     FLAlertLayer::create("MiniMacro", "Invalid JSON macro file.", "OK")->show();
                     return;
