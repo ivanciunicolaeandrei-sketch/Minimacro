@@ -169,4 +169,14 @@ class $modify(MiniMacroPauseLayer, PauseLayer) {
     void mmClose(CCObject*) { if (menuPanel) { menuPanel->removeFromParentAndCleanup(true); menuPanel = nullptr; } }
 };
 
-$on_mod(Loaded) { log::info("MiniMacro loaded: pause-menu button enabled."); }
+$on_mod(Loaded) {
+    std::error_code ec;
+    auto macroFolder = Mod::get()->getConfigDir() / "mm macro folder";
+    std::filesystem::create_directories(macroFolder, ec);
+    if (ec) {
+        log::error("MiniMacro: could not create config folder: {}", ec.message());
+    } else {
+        log::info("MiniMacro: config folder ready at {}", macroFolder.string());
+    }
+    log::info("MiniMacro loaded: pause-menu button enabled.");
+}
